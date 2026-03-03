@@ -892,10 +892,15 @@ if [[ "$CONTINUE_ONBOARD" =~ ^[Yy]$ ]]; then
     echo ""
     echo -e "正在启动 openclaw onboard 命令..."
     echo ""
-    # 捕获 Ctrl+C
-    trap 'echo -e "\n${YELLOW}已取消配置${NC}"; show_final_info "false" "true"; log "用户取消配置"' INT
+    # 临时取消 LD_PRELOAD 以解决 npm 安装 feishu 时找不到 /bin/npm 的问题
+    OLD_LD_PRELOAD="${LD_PRELOAD:-}"
+    unset LD_PRELOAD
+    # 捕获 Ctrl+C（同时恢复 LD_PRELOAD）
+    trap 'echo -e "\n${YELLOW}已取消配置${NC}"; [ -n "$OLD_LD_PRELOAD" ] && LD_PRELOAD="$OLD_LD_PRELOAD"; show_final_info "false" "true"; log "用户取消配置"' INT
     openclaw onboard
     trap - INT
+    # 恢复 LD_PRELOAD
+    [ -n "$OLD_LD_PRELOAD" ] && LD_PRELOAD="$OLD_LD_PRELOAD"
 
     # 检查配置文件是否存在且有效
     if [ -f "$HOME/.openclaw/openclaw.json" ] && node -e "JSON.parse(require('fs').readFileSync('$HOME/.openclaw/openclaw.json'))" 2>/dev/null; then
