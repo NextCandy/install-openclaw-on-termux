@@ -393,7 +393,7 @@ configure_npm() {
         fi
     else
         log "开始安装 Openclaw"
-        echo -e "${YELLOW}正在安装 Openclaw...${NC}"
+        echo -e "${YELLOW}正在安装 Openclaw 2026.2.26...${NC}"
         # 安装 Openclaw (使用 --ignore-scripts 跳过原生模块编译)
         # 设置环境变量跳过 node-llama-cpp 下载/编译（Termux 环境不支持）
         run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@2026.2.26 --ignore-scripts
