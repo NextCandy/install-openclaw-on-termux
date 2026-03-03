@@ -189,8 +189,8 @@ check_deps() {
         echo -e "${GREEN}包列表已是最新${NC}"
     fi
 
-    # 定义需要的基础包
-    DEPS=("nodejs-lts" "git" "openssh" "tmux" "termux-api" "termux-tools" "cmake" "python" "golang" "which")
+    # 定义需要的基础包（包含编译工具，用于原生模块构建）
+    DEPS=("nodejs-lts" "git" "openssh" "tmux" "termux-api" "termux-tools" "cmake" "python" "golang" "which" "clang" "ninja" "pkg-config" "build-essential")
     MISSING_DEPS=()
 
     for dep in "${DEPS[@]}"; do
@@ -323,6 +323,15 @@ configure_npm() {
         exit 1
     fi
 
+    # 设置临时目录（node-gyp 编译需要）
+    export TMPDIR="$HOME/tmp"
+
+    # 创建 GYP 配置（避免 node-gyp 找 Android NDK）
+    log "配置 GYP 环境"
+    mkdir -p "$HOME/.gyp"
+    echo "{'variables':{'android_ndk_path':''}}" > "$HOME/.gyp/include.gypi"
+    echo -e "${GREEN}✓ GYP 配置完成${NC}"
+
     # 检查并安装/更新 Openclaw
     TARGET_VERSION="2026.2.17"  # 指定安装版本
     INSTALLED_VERSION=""
@@ -359,11 +368,22 @@ configure_npm() {
                 if [ $FORCE_UPDATE -eq 1 ]; then
                     log "强制更新模式，直接更新"
                     echo -e "${YELLOW}正在更新 Openclaw...${NC}"
-                    run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION --ignore-scripts
-                    if [ $? -ne 0 ]; then
-                        log "Openclaw 更新失败"
-                        echo -e "${RED}错误：Openclaw 更新失败${NC}"
-                        exit 1
+                    # 尝试正常安装（允许 postinstall 生成 dist 目录）
+                    if ! run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION; then
+                        log "正常安装失败，尝试使用 --ignore-scripts"
+                        echo -e "${YELLOW}postinstall 失败，使用 --ignore-scripts 重试...${NC}"
+                        run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION --ignore-scripts
+                        if [ $? -ne 0 ]; then
+                            log "Openclaw 更新失败"
+                            echo -e "${RED}错误：Openclaw 更新失败${NC}"
+                            exit 1
+                        fi
+                        # 尝试手动构建
+                        BASE_DIR="$NPM_GLOBAL/lib/node_modules/openclaw"
+                        if [ -f "$BASE_DIR/tsconfig.json" ]; then
+                            log "尝试手动 TypeScript 编译"
+                            cd "$BASE_DIR" && npx tsc --skipLibCheck 2>/dev/null || true
+                        fi
                     fi
                     log "Openclaw 更新完成"
                     INSTALLED_VERSION=$(npm list -g openclaw --depth=0 2>/dev/null | grep -oE 'openclaw@[0-9]+\.[0-9]+\.[0-9]+' | cut -d@ -f2)
@@ -375,11 +395,22 @@ configure_npm() {
                     if [ "$UPDATE_CHOICE" = "y" ] || [ "$UPDATE_CHOICE" = "Y" ]; then
                         log "开始更新 Openclaw"
                         echo -e "${YELLOW}正在更新 Openclaw...${NC}"
-                        run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION --ignore-scripts
-                        if [ $? -ne 0 ]; then
-                            log "Openclaw 更新失败"
-                            echo -e "${RED}错误：Openclaw 更新失败${NC}"
-                            exit 1
+                        # 尝试正常安装（允许 postinstall 生成 dist 目录）
+                        if ! run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION; then
+                            log "正常安装失败，尝试使用 --ignore-scripts"
+                            echo -e "${YELLOW}postinstall 失败，使用 --ignore-scripts 重试...${NC}"
+                            run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION --ignore-scripts
+                            if [ $? -ne 0 ]; then
+                                log "Openclaw 更新失败"
+                                echo -e "${RED}错误：Openclaw 更新失败${NC}"
+                                exit 1
+                            fi
+                            # 尝试手动构建
+                            BASE_DIR="$NPM_GLOBAL/lib/node_modules/openclaw"
+                            if [ -f "$BASE_DIR/tsconfig.json" ]; then
+                                log "尝试手动 TypeScript 编译"
+                                cd "$BASE_DIR" && npx tsc --skipLibCheck 2>/dev/null || true
+                            fi
                         fi
                         log "Openclaw 更新完成"
                         INSTALLED_VERSION=$(npm list -g openclaw --depth=0 2>/dev/null | grep -oE 'openclaw@[0-9]+\.[0-9]+\.[0-9]+' | cut -d@ -f2)
@@ -397,13 +428,22 @@ configure_npm() {
     else
         log "开始安装 Openclaw"
         echo -e "${YELLOW}正在安装 Openclaw $TARGET_VERSION...${NC}"
-        # 安装 Openclaw (使用 --ignore-scripts 跳过原生模块编译)
-        # 设置环境变量跳过 node-llama-cpp 下载/编译（Termux 环境不支持）
-        run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION --ignore-scripts
-        if [ $? -ne 0 ]; then
-            log "Openclaw 安装失败"
-            echo -e "${RED}错误：Openclaw 安装失败${NC}"
-            exit 1
+        # 尝试正常安装（允许 postinstall 生成 dist 目录）
+        if ! run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION; then
+            log "正常安装失败，尝试使用 --ignore-scripts"
+            echo -e "${YELLOW}postinstall 失败，使用 --ignore-scripts 重试...${NC}"
+            run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION --ignore-scripts
+            if [ $? -ne 0 ]; then
+                log "Openclaw 安装失败"
+                echo -e "${RED}错误：Openclaw 安装失败${NC}"
+                exit 1
+            fi
+            # 尝试手动构建
+            BASE_DIR="$NPM_GLOBAL/lib/node_modules/openclaw"
+            if [ -f "$BASE_DIR/tsconfig.json" ]; then
+                log "尝试手动 TypeScript 编译"
+                cd "$BASE_DIR" && npx tsc --skipLibCheck 2>/dev/null || true
+            fi
         fi
         log "Openclaw 安装完成"
         INSTALLED_VERSION=$(npm list -g openclaw --depth=0 2>/dev/null | grep -oE 'openclaw@[0-9]+\.[0-9]+\.[0-9]+' | cut -d@ -f2)
@@ -414,6 +454,27 @@ configure_npm() {
     fi
 
     BASE_DIR="$NPM_GLOBAL/lib/node_modules/openclaw"
+
+    # 验证 dist 目录是否存在
+    if [ ! -d "$BASE_DIR/dist" ]; then
+        log "dist 目录缺失，尝试构建..."
+        echo -e "${YELLOW}⚠️  dist 目录缺失，尝试构建...${NC}"
+        cd "$BASE_DIR"
+        # 尝试多种构建方式
+        if [ -f "tsconfig.json" ]; then
+            npx tsc --skipLibCheck 2>/dev/null || true
+        fi
+        npm run build 2>/dev/null || true
+        # 再次验证
+        if [ ! -d "$BASE_DIR/dist" ]; then
+            log "dist 目录构建失败"
+            echo -e "${RED}错误：dist 目录构建失败，Openclaw 可能无法正常运行${NC}"
+            echo -e "${YELLOW}请检查是否有编译错误，或尝试手动构建${NC}"
+            exit 1
+        fi
+        log "dist 目录构建成功"
+        echo -e "${GREEN}✓ dist 目录构建成功${NC}"
+    fi
     
     # 应用 koffi stub (Termux 兼容性修复)
     apply_koffi_stub
