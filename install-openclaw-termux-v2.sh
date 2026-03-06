@@ -242,18 +242,65 @@ ensure_parent_dir() {
     }
 }
 
+render_bash_export() {
+    local var_name="$1"
+    local var_value="${2-}"
+
+    printf 'export %s=%q\n' "$var_name" "$var_value"
+}
+
 render_openclaw_env_content() {
-    cat <<EOF
-#!/bin/bash
-export TERMUX_VERSION=1
-export TMPDIR="$TMP_DIR"
-export OPENCLAW_PORT="$PORT"
-export OPENCLAW_GATEWAY_TOKEN="$TOKEN"
-export OPENCLAW_AUTO_START="$AUTO_START"
-export OPENCLAW_LOG_DIR="$LOG_DIR"
-export OPENCLAW_NPM_BIN="$NPM_BIN"
-export OPENCLAW_BIN="$OPENCLAW_BIN"
-EOF
+    printf '%s\n' '#!/bin/bash'
+    printf '%s\n' 'export TERMUX_VERSION=1'
+    render_bash_export "TMPDIR" "$TMP_DIR"
+    render_bash_export "OPENCLAW_PORT" "$PORT"
+    render_bash_export "OPENCLAW_GATEWAY_TOKEN" "$TOKEN"
+    render_bash_export "OPENCLAW_AUTO_START" "$AUTO_START"
+    render_bash_export "OPENCLAW_LOG_DIR" "$LOG_DIR"
+    render_bash_export "OPENCLAW_NPM_BIN" "$NPM_BIN"
+    render_bash_export "OPENCLAW_BIN" "$OPENCLAW_BIN"
+}
+
+openclaw_gateway_process_pattern() {
+    printf '%s' "$OPENCLAW_BASE_DIR/dist/entry.js gateway"
+}
+
+find_openclaw_gateway_processes() {
+    local gateway_pattern=""
+    gateway_pattern="$(openclaw_gateway_process_pattern)"
+
+    if ! command -v pgrep >/dev/null 2>&1; then
+        return 0
+    fi
+
+    pgrep -f "$gateway_pattern" 2>/dev/null || true
+}
+
+stop_openclaw_gateway_service() {
+    local gateway_pattern=""
+    local leftover_processes=""
+    gateway_pattern="$(openclaw_gateway_process_pattern)"
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "[DRY-RUN] tmux kill-session -t openclaw"
+        echo "[DRY-RUN] pkill -f $gateway_pattern"
+        echo "[DRY-RUN] pkill -9 -f $gateway_pattern"
+        return 0
+    fi
+
+    log "STOP: OpenClaw gateway service"
+    if command -v tmux >/dev/null 2>&1; then
+        tmux kill-session -t openclaw >/dev/null 2>&1 || true
+    fi
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -f "$gateway_pattern" >/dev/null 2>&1 || true
+        sleep 1
+        leftover_processes="$(find_openclaw_gateway_processes)"
+        if [ -n "$leftover_processes" ]; then
+            pkill -9 -f "$gateway_pattern" >/dev/null 2>&1 || true
+        fi
+    fi
+    sleep 1
 }
 
 build_gateway_tmux_command() {
@@ -265,6 +312,27 @@ render_openclaw_runtime_functions() {
     gateway_cmd="$(build_gateway_tmux_command)"
 
     cat <<EOF
+_openclaw_runtime_gateway_pattern() {
+    printf '%s' '$OPENCLAW_BASE_DIR/dist/entry.js gateway'
+}
+
+_openclaw_runtime_stop_gateway_service() {
+    local gateway_pattern=""
+    gateway_pattern="\$(_openclaw_runtime_gateway_pattern)"
+
+    if command -v tmux >/dev/null 2>&1; then
+        tmux kill-session -t openclaw 2>/dev/null || true
+    fi
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -f "$gateway_pattern" 2>/dev/null || true
+        sleep 1
+        if command -v pgrep >/dev/null 2>&1 && pgrep -f "$gateway_pattern" >/dev/null 2>&1; then
+            pkill -9 -f "$gateway_pattern" 2>/dev/null || true
+        fi
+    fi
+    sleep 1
+}
+
 ocr() {
     local gateway_cmd='$gateway_cmd'
     [ -f "$OPENCLAW_ENV_FILE" ] && . "$OPENCLAW_ENV_FILE"
@@ -273,9 +341,7 @@ ocr() {
         *) export PATH="$NPM_BIN:\$PATH" ;;
     esac
     export TMPDIR="\${TMPDIR:-$TMP_DIR}"
-    pkill -9 -f 'openclaw' 2>/dev/null || true
-    tmux kill-session -t openclaw 2>/dev/null || true
-    sleep 1
+    _openclaw_runtime_stop_gateway_service
     tmux new-session -d -s openclaw "\$gateway_cmd" || return \$?
     sleep 2
     if tmux has-session -t openclaw 2>/dev/null; then
@@ -295,10 +361,9 @@ oclog() {
 }
 
 ockill() {
-    pkill -9 -f 'openclaw' 2>/dev/null || true
-    tmux kill-session -t openclaw 2>/dev/null || true
-    sleep 1
-    if tmux has-session -t openclaw 2>/dev/null; then
+    _openclaw_runtime_stop_gateway_service
+    if tmux has-session -t openclaw 2>/dev/null || \
+        (command -v pgrep >/dev/null 2>&1 && pgrep -f "\$(_openclaw_runtime_gateway_pattern)" >/dev/null 2>&1); then
         echo "❌ OpenClaw 服务仍在运行，请手动检查"
     else
         echo "✅ OpenClaw 服务已停止"
@@ -349,7 +414,7 @@ cleanup_current_shell_openclaw_runtime() {
         return 0
     fi
 
-    unset -f ocr oclog ockill 2>/dev/null || true
+    unset -f ocr oclog ockill _openclaw_runtime_gateway_pattern _openclaw_runtime_stop_gateway_service 2>/dev/null || true
     unset OPENCLAW_GATEWAY_TOKEN OPENCLAW_PORT OPENCLAW_AUTO_START OPENCLAW_LOG_DIR OPENCLAW_NPM_BIN OPENCLAW_BIN
     hash -r 2>/dev/null || true
 }
@@ -1271,7 +1336,7 @@ start_service() {
         warn "未检测到 termux-wake-lock，跳过唤醒锁激活"
     fi
 
-    running_process=$(pgrep -f "openclaw gateway" 2>/dev/null || true)
+    running_process="$(find_openclaw_gateway_processes)"
     if tmux has-session -t openclaw 2>/dev/null; then
         has_tmux_session="yes"
     fi
@@ -1284,9 +1349,7 @@ start_service() {
             return 0
         fi
 
-        pkill -9 -f 'openclaw' 2>/dev/null || true
-        tmux kill-session -t openclaw 2>/dev/null || true
-        sleep 1
+        stop_openclaw_gateway_service
     fi
 
     run_cmd mkdir -p "$TMP_DIR" "$LOG_DIR" || {
@@ -1389,9 +1452,7 @@ run_onboard() {
         return 0
     }
 
-    pkill -9 -f 'openclaw' 2>/dev/null || true
-    tmux kill-session -t openclaw 2>/dev/null || true
-    sleep 1
+    stop_openclaw_gateway_service
 
     start_service || {
         warn "onboard 后自动重启服务失败，请手动执行 ocr"
@@ -1411,13 +1472,7 @@ uninstall_openclaw() {
     warn "正在卸载 OpenClaw..."
 
     warn "[UNINSTALL 1/5] 正在停止服务与后台会话..."
-    if [ "$DRY_RUN" -eq 1 ]; then
-        echo "[DRY-RUN] pkill -9 -f openclaw"
-        echo "[DRY-RUN] tmux kill-session -t openclaw"
-    else
-        command -v pkill >/dev/null 2>&1 && pkill -9 -f 'openclaw' >/dev/null 2>&1 || true
-        command -v tmux >/dev/null 2>&1 && tmux kill-session -t openclaw >/dev/null 2>&1 || true
-    fi
+    stop_openclaw_gateway_service
 
     warn "[UNINSTALL 2/5] 正在清理 shell 集成与环境文件..."
     remove_openclaw_shell_block || return $?
