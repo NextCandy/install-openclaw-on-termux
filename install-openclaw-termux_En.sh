@@ -283,16 +283,6 @@ check_deps() {
     fi
     
     log "Node.js version check passed: $NODE_VERSION"
-
-    touch "$BASHRC" 2>/dev/null
-
-    log "Setting NPM mirror"
-    npm config set registry https://registry.npmmirror.com
-    if [ $? -ne 0 ]; then
-        log "NPM mirror setup failed"
-        echo -e "${RED}Error: NPM mirror setup failed${NC}"
-        exit 1
-    fi
 }
 
 configure_npm() {

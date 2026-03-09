@@ -51,7 +51,6 @@ curl -sL https://s.zhihai.me/openclaw_en > openclaw-install.sh && source opencla
 
 - **Dependency Check**: Automatically detects and installs Node.js, Git, CMake, and other necessary components
 - **Version Verification**: Ensures Node.js version ≥ 22
-- **Mirror Acceleration**: Automatically configures NPM mirror to domestic mirror
 - **Compatibility Patches**:
   - Fix Logger path (`/tmp/openclaw` → `$HOME/openclaw-logs`)
   - Fix clipboard module (Termux environment compatible)
@@ -350,22 +349,6 @@ pkg clean
 
 # Update again
 pkg update -y
-```
-
-#### Issue 3: NPM Mirror Setting Failed
-
-**Symptom**:
-```
-Error: NPM mirror setting failed
-```
-
-**Solution**:
-```bash
-# Manually set mirror
-npm config set registry https://registry.npmmirror.com
-
-# Verify
-npm config get registry
 ```
 
 ### Service Startup Failures
@@ -667,18 +650,17 @@ The script fully supports multi-device deployment, and each device's configurati
 </details>
 
 <details>
-<summary><b>Q4: Can I change the NPM mirror source?</b></summary>
+<summary><b>Q4: Can I change the NPM registry source?</b></summary>
 
-Yes. The script defaults to using the Taobao mirror `https://registry.npmmirror.com`, you can manually modify:
+Yes. The script defaults to using the official NPM registry `https://registry.npmjs.org`. You can manually change to a mirror if needed:
 
 ```bash
-# View current mirror
+# View current registry
 npm config get registry
 
-# Change to other mirror (e.g., official source)
-npm config set registry https://registry.npmjs.org
-
-# Or use other domestic mirrors
+# Change to a mirror (useful in certain regions)
+# Taobao mirror (China)
+npm config set registry https://registry.npmmirror.com
 # Huawei Cloud
 npm config set registry https://mirrors.huaweicloud.com/repository/npm/
 # Tencent Cloud
