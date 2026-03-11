@@ -17,31 +17,48 @@ pkg update -y
 # 这会触发 bash.bashrc 交互式 conffile 提示，并可能打断后续脚本执行。
 pkg install proot-distro git curl wget nano -y
 
-# 2. 安装 Ubuntu（检测可用发行版并安装）
+# 2. 安装 Ubuntu（自动决定可用发行版，不要求用户选择版本）
 echo "2. 安装并准备 proot-distro 的 Ubuntu"
 
-# 检查已安装的发行版
-INSTALLED=$(proot-distro list --installed 2>/dev/null || ls ~/.proot-distro/installed-rootfs/ 2>/dev/null || echo "")
+# 检查已安装的发行版（旧版 proot-distro 不支持 `list --installed`）
+INSTALLED_NAMES=$(ls -1 "$HOME/.proot-distro/installed-rootfs/" 2>/dev/null || true)
 
-# 检查 ubuntu 是否已安装
-if echo "$INSTALLED" | grep -q "ubuntu"; then
-  echo "Ubuntu 发行版已安装，跳过安装步骤"
-  DISTRO="ubuntu"
+# 优先复用已安装的 Ubuntu 发行版
+DISTRO=""
+for candidate in ubuntu ubuntu-24.04 ubuntu-22.04 ubuntu-20.04; do
+  if printf '%s\n' "$INSTALLED_NAMES" | grep -qx "$candidate"; then
+    DISTRO="$candidate"
+    break
+  fi
+done
+
+if [ -n "$DISTRO" ]; then
+  echo "检测到已安装 Ubuntu 发行版: $DISTRO，跳过安装步骤"
 else
-  # 优先安装 ubuntu-22.04, 回退到 ubuntu-20.04 或 ubuntu
-  AVAILABLE=$(proot-distro list || true)
-  if echo "$AVAILABLE" | grep -q "ubuntu-22.04"; then
-    DISTRO="ubuntu-22.04"
-  elif echo "$AVAILABLE" | grep -q "ubuntu-20.04"; then
-    DISTRO="ubuntu-20.04"
-  else
+  AVAILABLE=$(proot-distro list 2>/dev/null || true)
+  AVAILABLE_NAMES=$(printf '%s\n' "$AVAILABLE" | sed -n 's/.*< *\([^>]*\) *>.*/\1/p' | sed 's/[[:space:]]*$//')
+
+  # 优先使用通用 ubuntu，只有在其不可用时才自动回退到版本化条目
+  for candidate in ubuntu ubuntu-24.04 ubuntu-22.04 ubuntu-20.04; do
+    if printf '%s\n' "$AVAILABLE_NAMES" | grep -qx "$candidate"; then
+      DISTRO="$candidate"
+      break
+    fi
+  done
+
+  if [ -z "$DISTRO" ]; then
     DISTRO="ubuntu"
   fi
-  echo "选择安装发行版: $DISTRO"
+
+  echo "自动使用 Ubuntu 发行版: $DISTRO"
   if ! proot-distro install "$DISTRO"; then
-    echo "安装 $DISTRO 失败，尝试回退到 ubuntu..."
-    DISTRO="ubuntu"
-    proot-distro install "$DISTRO" || echo "Ubuntu 可能已安装，继续..."
+    if [ "$DISTRO" != "ubuntu" ]; then
+      echo "安装 $DISTRO 失败，尝试回退到 ubuntu..."
+      DISTRO="ubuntu"
+      proot-distro install "$DISTRO" || echo "Ubuntu 可能已安装，继续..."
+    else
+      echo "安装 ubuntu 失败，继续尝试后续步骤..."
+    fi
   fi
 fi
 
