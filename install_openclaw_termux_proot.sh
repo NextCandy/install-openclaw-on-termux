@@ -113,7 +113,40 @@ npm install -g openclaw
 mkdir -p "$HOME/.openclaw"
 cat > "$HOME/.openclaw/hijack.js" <<EOL
 const Module = require('module');
+const os = require('node:os');
 const originalRequire = Module.prototype.require;
+const originalNetworkInterfaces = os.networkInterfaces.bind(os);
+
+os.networkInterfaces = function patchedNetworkInterfaces() {
+  try {
+    return originalNetworkInterfaces();
+  } catch (err) {
+    const fallbackIp = process.env.OPENCLAW_PROOT_IPV4 || '127.0.0.1';
+    return {
+      eth0: [{
+        address: fallbackIp,
+        netmask: '255.0.0.0',
+        family: 'IPv4',
+        mac: '00:00:00:00:00:00',
+        internal: false,
+        cidr: fallbackIp + '/8'
+      }],
+      lo: [{
+        address: '127.0.0.1',
+        netmask: '255.0.0.0',
+        family: 'IPv4',
+        mac: '00:00:00:00:00:00',
+        internal: true,
+        cidr: '127.0.0.1/8'
+      }]
+    };
+  }
+};
+
+if (typeof Module.syncBuiltinESMExports === 'function') {
+  Module.syncBuiltinESMExports();
+}
+
 Module.prototype.require = function(path) {
   if (path === 'child_process') {
     return {
@@ -140,11 +173,25 @@ if [ ! -x "$OPENCLAW_BIN" ] && [ ! -f "$OPENCLAW_BIN" ]; then
 fi
 echo "找到 openclaw: $OPENCLAW_BIN"
 
+# 8.1 包装 openclaw 命令，确保所有 CLI 子命令都自动加载 proot shim
+REAL_OPENCLAW_BIN="${OPENCLAW_BIN}.proot-real"
+if ! grep -q 'OPENCLAW_PROOT_WRAPPER' "$OPENCLAW_BIN" 2>/dev/null; then
+  rm -f "$REAL_OPENCLAW_BIN"
+  mv "$OPENCLAW_BIN" "$REAL_OPENCLAW_BIN"
+fi
+cat > "$OPENCLAW_BIN" <<EOF
+#!/usr/bin/env bash
+# OPENCLAW_PROOT_WRAPPER
+export NODE_OPTIONS="--require=$HOME/.openclaw/hijack.js\${NODE_OPTIONS:+ \$NODE_OPTIONS}"
+exec "$REAL_OPENCLAW_BIN" "\$@"
+EOF
+chmod +x "$OPENCLAW_BIN"
+
 # 确保 nohup 可用，否则使用 setsid
 if command -v nohup >/dev/null 2>&1; then
-  nohup node -r "$HOME/.openclaw/hijack.js" "$OPENCLAW_BIN" gateway > "$HOME/openclaw_gateway.log" 2>&1 &
+  nohup "$OPENCLAW_BIN" gateway > "$HOME/openclaw_gateway.log" 2>&1 &
 else
-  setsid node -r "$HOME/.openclaw/hijack.js" "$OPENCLAW_BIN" gateway > "$HOME/openclaw_gateway.log" 2>&1 &
+  setsid "$OPENCLAW_BIN" gateway > "$HOME/openclaw_gateway.log" 2>&1 &
 fi
 
 echo "OpenClaw gateway 已后台启动，日志: $HOME/openclaw_gateway.log"
