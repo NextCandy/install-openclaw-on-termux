@@ -20,8 +20,17 @@ pkg install proot-distro git curl wget nano -y
 # 2. 安装 Ubuntu（自动决定可用发行版，不要求用户选择版本）
 echo "2. 安装并准备 proot-distro 的 Ubuntu"
 
-# 检查已安装的发行版（旧版 proot-distro 不支持 `list --installed`）
-INSTALLED_NAMES=$(ls -1 "$HOME/.proot-distro/installed-rootfs/" 2>/dev/null || true)
+# 检查已安装的发行版（不同版本 proot-distro 的安装目录可能不同）
+INSTALLED_NAMES=""
+for installed_rootfs_dir in \
+  "$PREFIX/var/lib/proot-distro/installed-rootfs" \
+  "$HOME/.proot-distro/installed-rootfs"
+do
+  if [ -d "$installed_rootfs_dir" ]; then
+    INSTALLED_NAMES=$(ls -1 "$installed_rootfs_dir" 2>/dev/null || true)
+    break
+  fi
+done
 
 # 优先复用已安装的 Ubuntu 发行版
 DISTRO=""
@@ -79,32 +88,57 @@ echo "检测到 Ubuntu 代号: $CODENAME"
 ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
 echo "检测到架构: $ARCH"
 
-# 根据架构和版本选择源（优先使用 HTTPS，并探测当前 codename/arch 是否可用）
+# 根据架构和版本选择源（优先使用 HTTPS，并用 apt-get update 实测可用性）
 if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
   echo "arm64 架构，探测可用的 ubuntu-ports HTTPS 镜像"
   MIRROR_CANDIDATES=(
-    "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports"
     "https://mirrors.ustc.edu.cn/ubuntu-ports"
+    "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports"
     "https://ports.ubuntu.com/ubuntu-ports"
   )
 else
   echo "$ARCH 架构，探测可用的 Ubuntu HTTPS 镜像"
   MIRROR_CANDIDATES=(
-    "https://mirrors.tuna.tsinghua.edu.cn/ubuntu"
     "https://mirrors.ustc.edu.cn/ubuntu"
+    "https://mirrors.tuna.tsinghua.edu.cn/ubuntu"
     "https://archive.ubuntu.com/ubuntu"
   )
 fi
+
+write_sources_list() {
+  local mirror_url="$1"
+  cat > /etc/apt/sources.list <<OPENCLAW_SOURCES_LIST_EOF
+deb $mirror_url $CODENAME main restricted universe multiverse
+deb $mirror_url $CODENAME-updates main restricted universe multiverse
+deb $mirror_url $CODENAME-backports main restricted universe multiverse
+deb $mirror_url $CODENAME-security main restricted universe multiverse
+OPENCLAW_SOURCES_LIST_EOF
+}
+
+apt_update_cleanly() {
+  local log_file="$1"
+  if DEBIAN_FRONTEND=noninteractive apt-get update 2>&1 | tee "$log_file"; then
+    if ! grep -Eiq 'Failed to fetch|Unable to connect|Could not connect|Some index files failed to download' "$log_file"; then
+      return 0
+    fi
+  fi
+  return 1
+}
 
 MIRROR_URL=""
 for candidate in "${MIRROR_CANDIDATES[@]}"; do
   TEST_URL="$candidate/dists/$CODENAME/main/binary-$ARCH/Packages.gz"
   echo "测试镜像: $TEST_URL"
-  if curl -fsI -L --connect-timeout 8 --max-time 20 "$TEST_URL" >/dev/null 2>&1; then
+  write_sources_list "$candidate"
+  APT_UPDATE_LOG="$(mktemp)"
+  if apt_update_cleanly "$APT_UPDATE_LOG"; then
     MIRROR_URL="$candidate"
     echo "使用镜像: $MIRROR_URL"
+    rm -f "$APT_UPDATE_LOG"
     break
   fi
+  echo "镜像不可用，尝试下一个: $candidate"
+  rm -f "$APT_UPDATE_LOG"
 done
 
 if [ -z "$MIRROR_URL" ]; then
@@ -116,19 +150,20 @@ if [ -z "$MIRROR_URL" ]; then
   echo "警告：镜像探测失败，回退到: $MIRROR_URL"
 fi
 
-# 写入源
-cat > /etc/apt/sources.list <<OPENCLAW_SOURCES_LIST_EOF
-deb $MIRROR_URL $CODENAME main restricted universe multiverse
-deb $MIRROR_URL $CODENAME-updates main restricted universe multiverse
-deb $MIRROR_URL $CODENAME-backports main restricted universe multiverse
-deb $MIRROR_URL $CODENAME-security main restricted universe multiverse
-OPENCLAW_SOURCES_LIST_EOF
-
-apt update
-apt upgrade -y
+# 写入最终选定的源，并再次刷新索引
+write_sources_list "$MIRROR_URL"
+FINAL_APT_UPDATE_LOG="$(mktemp)"
+if ! apt_update_cleanly "$FINAL_APT_UPDATE_LOG"; then
+  echo "错误：最终 apt-get update 失败，无法继续安装依赖。"
+  cat "$FINAL_APT_UPDATE_LOG"
+  rm -f "$FINAL_APT_UPDATE_LOG"
+  exit 1
+fi
+rm -f "$FINAL_APT_UPDATE_LOG"
+DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
 
 # 4. 安装构建与运行时依赖（nvm/node 编译需要）
-apt install -y curl build-essential git wget nano ca-certificates python3 python3-pip gnupg lsb-release
+DEBIAN_FRONTEND=noninteractive apt-get install -y curl build-essential git wget nano ca-certificates python3 python3-pip gnupg lsb-release
 
 # 5. 安装 nvm 并切换 Node.js 22.x
 export NVM_DIR="$HOME/.nvm"
