@@ -13,7 +13,8 @@ echo "如果尚未授权 Termux 存储，请在新终端运行: termux-setup-sto
 # 1. 更新 Termux 包
 echo "1. 更新 Termux 包"
 pkg update -y
-pkg upgrade -y
+# 避免在 `curl | bash` 过程中升级当前正在运行的 bash，
+# 这会触发 bash.bashrc 交互式 conffile 提示，并可能打断后续脚本执行。
 pkg install proot-distro git curl wget nano -y
 
 # 2. 安装 Ubuntu（检测可用发行版并安装）
@@ -79,12 +80,12 @@ else
 fi
 
 # 写入源
-cat > /etc/apt/sources.list <<EOF
+cat > /etc/apt/sources.list <<OPENCLAW_SOURCES_LIST_EOF
 deb $MIRROR_URL $CODENAME main restricted universe multiverse
 deb $MIRROR_URL $CODENAME-updates main restricted universe multiverse
 deb $MIRROR_URL $CODENAME-backports main restricted universe multiverse
 deb $MIRROR_URL $CODENAME-security main restricted universe multiverse
-EOF
+OPENCLAW_SOURCES_LIST_EOF
 
 apt update
 apt upgrade -y
@@ -111,7 +112,7 @@ npm install -g openclaw
 
 # 7. 创建 hijack.js 脚本（确保目录存在）
 mkdir -p "$HOME/.openclaw"
-cat > "$HOME/.openclaw/hijack.js" <<EOL
+cat > "$HOME/.openclaw/hijack.js" <<'OPENCLAW_HIJACK_JS_EOF'
 const Module = require('module');
 const os = require('node:os');
 const originalRequire = Module.prototype.require;
@@ -157,7 +158,7 @@ Module.prototype.require = function(path) {
   }
   return originalRequire.apply(this, arguments);
 };
-EOL
+OPENCLAW_HIJACK_JS_EOF
 
 # 8. 启动 OpenClaw 网关（后台运行），查找 openclaw 可执行路径
 OPENCLAW_BIN="$(command -v openclaw || true)"
@@ -179,12 +180,12 @@ if ! grep -q 'OPENCLAW_PROOT_WRAPPER' "$OPENCLAW_BIN" 2>/dev/null; then
   rm -f "$REAL_OPENCLAW_BIN"
   mv "$OPENCLAW_BIN" "$REAL_OPENCLAW_BIN"
 fi
-cat > "$OPENCLAW_BIN" <<EOF
+cat > "$OPENCLAW_BIN" <<OPENCLAW_WRAPPER_EOF
 #!/usr/bin/env bash
 # OPENCLAW_PROOT_WRAPPER
 export NODE_OPTIONS="--require=$HOME/.openclaw/hijack.js\${NODE_OPTIONS:+ \$NODE_OPTIONS}"
 exec "$REAL_OPENCLAW_BIN" "\$@"
-EOF
+OPENCLAW_WRAPPER_EOF
 chmod +x "$OPENCLAW_BIN"
 
 # 确保 nohup 可用，否则使用 setsid
