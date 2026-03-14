@@ -314,6 +314,12 @@ configure_npm() {
     fi
     export PATH="$NPM_BIN:$PATH"
 
+    # 设置 Node.js 内存限制（避免大模型配置时内存不足）
+    if ! grep -q 'export NODE_OPTIONS="--max-old-space-size=2048"' "$BASHRC" 2>/dev/null; then
+        echo 'export NODE_OPTIONS="--max-old-space-size=2048"' >> "$BASHRC"
+    fi
+    export NODE_OPTIONS="--max-old-space-size=2048"
+
     # 在安装前创建必要的目录（Termux 兼容性处理）
     log "创建 Termux 兼容性目录"
     mkdir -p "$LOG_DIR" "$HOME/tmp"
