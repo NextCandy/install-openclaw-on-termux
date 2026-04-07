@@ -295,6 +295,51 @@ check_deps() {
     fi
 }
 
+install_glibc() {
+    # Install glibc-runner for better compatibility
+    log "开始安装 glibc-runner"
+    echo -e "\n${YELLOW}[1.5/6] 正在安装 glibc-runner...${NC}"
+    
+    # Check if already installed
+    if [ -f "$HOME/.openclaw-android/.glibc-arch" ] && [ -x "$PREFIX/glibc/lib/ld-linux-aarch64.so.1" ]; then
+        echo -e "${GREEN}✓ glibc-runner 已安装${NC}"
+        log "glibc-runner 已安装，跳过"
+        return 0
+    fi
+    
+    # Install pacman if not present
+    if ! command -v pacman &>/dev/null; then
+        echo -e "${YELLOW}安装 pacman...${NC}"
+        run_cmd pkg install -y pacman
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}错误：pacman 安装失败${NC}"
+            log "pacman 安装失败"
+            exit 1
+        fi
+    fi
+    
+    # Initialize pacman keyring (may take time)
+    echo -e "${YELLOW}初始化 pacman keyring...${NC}"
+    run_cmd pacman-key --init 2>/dev/null || true
+    run_cmd pacman-key --populate 2>/dev/null || true
+    
+    # Install glibc-runner
+    echo -e "${YELLOW}安装 glibc-runner...${NC}"
+    run_cmd pacman -Sy glibc-runner --noconfirm --assume-installed bash,patchelf,resolv-conf
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}错误：glibc-runner 安装失败${NC}"
+        log "glibc-runner 安装失败"
+        exit 1
+    fi
+    
+    # Create marker file
+    mkdir -p "$HOME/.openclaw-android"
+    touch "$HOME/.openclaw-android/.glibc-arch"
+    
+    echo -e "${GREEN}✓ glibc-runner 安装成功${NC}"
+    log "glibc-runner 安装成功"
+}
+
 configure_npm() {
     # Configure NPM environment and install Openclaw
     log "开始配置 NPM"
@@ -431,6 +476,11 @@ configure_npm() {
 
     BASE_DIR="$NPM_GLOBAL/lib/node_modules/openclaw"
 
+    # 运行 openclaw update 来构建原生模块
+    echo -e "${YELLOW}正在构建原生模块（可能需要几分钟）...${NC}"
+    export OA_GLIBC=1
+    run_cmd openclaw update || true
+
     # 验证 dist 目录是否存在
     if [ ! -d "$BASE_DIR/dist" ]; then
         log "dist 目录缺失，尝试构建..."
@@ -467,6 +517,18 @@ WRAPPER
 
     # 应用 koffi stub (Termux 兼容性修复)
     apply_koffi_stub
+
+    # 安装额外的运行时依赖（解决用户报告缺少依赖的问题）
+    log "安装额外依赖包"
+    echo -e "${YELLOW}[2.6/6] 正在安装额外依赖包...${NC}"
+    run_cmd npm install -g @larksuiteoapi/node-sdk @slack/web-api grammy @buape/carbon
+    if [ $? -eq 0 ]; then
+        log "额外依赖包安装成功"
+        echo -e "${GREEN}✓ 额外依赖包安装成功${NC}"
+    else
+        log "警告：部分额外依赖包安装失败"
+        echo -e "${YELLOW}⚠️  部分额外依赖包安装失败，但这通常不影响基础功能${NC}"
+    fi
 }
 
 apply_patches() {
@@ -607,6 +669,7 @@ termux-wake-lock 2>/dev/null"
 # --- OpenClaw Start ---
 # WARNING: This section contains your access token - keep ~/.bashrc secure
 export TERMUX_VERSION=1
+export OA_GLIBC=1
 export TMPDIR=\$HOME/tmp
 export OPENCLAW_GATEWAY_TOKEN=$TOKEN
 export PATH=$NPM_BIN:\$PATH
@@ -870,6 +933,7 @@ AUTO_START=${AUTO_START:-y}
 # 执行步骤
 log "脚本开始执行，用户配置: 端口=$PORT, Token=$TOKEN, 自启动=$AUTO_START"
 check_deps
+install_glibc
 configure_npm
 apply_patches
 setup_autostart
