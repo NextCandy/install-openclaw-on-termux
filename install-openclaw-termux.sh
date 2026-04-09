@@ -195,7 +195,7 @@ apply_lancedb_stub() {
 // lancedb only supports darwin,linux,win32 with x64/arm64 CPUs.
 const handler = {
   get(_, prop) {
-    if (prop === '__esModule') return false;
+    if (prop === '__esModule') return true;
     if (prop === 'default') return proxy;
     if (prop === 'then') return undefined;
     return function() { throw new Error('@lancedb/lancedb stub: not available on android-arm64'); };
@@ -598,7 +598,8 @@ configure_npm() {
     # 设置 npm 忽略平台检查，避免 openclaw update 内部调用 npm 时因 lancedb 等包报 EBADPLATFORM
     npm config set force true 2>/dev/null || true
     run_cmd openclaw update || true
-    npm config set force false 2>/dev/null || true
+    # 恢复 npm 默认配置（确保即使 update 失败也恢复，避免 force 永久生效）
+    npm config delete force 2>/dev/null || true
 
     # 验证 dist 目录是否存在
     if [ ! -d "$BASE_DIR/dist" ]; then
