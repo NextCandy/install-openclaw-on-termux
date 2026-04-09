@@ -180,6 +180,48 @@ EOF
     fi
 }
 
+apply_lancedb_stub() {
+    # Apply @lancedb/lancedb stub for Termux compatibility (android-arm64)
+    # lancedb native module does not support android platform
+    log "应用 lancedb stub"
+    echo -e "${YELLOW}正在应用 lancedb 兼容性修复...${NC}"
+    
+    LANCEDB_DIR="$NPM_GLOBAL/lib/node_modules/openclaw/node_modules/@lancedb/lancedb"
+    
+    if [ -d "$LANCEDB_DIR" ]; then
+        # Stub the native index.js
+        cat > "$LANCEDB_DIR/index.js" << 'EOF'
+// @lancedb/lancedb stub for android-arm64 — native module not available on this platform.
+// lancedb only supports darwin,linux,win32 with x64/arm64 CPUs.
+const handler = {
+  get(_, prop) {
+    if (prop === '__esModule') return false;
+    if (prop === 'default') return proxy;
+    if (prop === 'then') return undefined;
+    return function() { throw new Error('@lancedb/lancedb stub: not available on android-arm64'); };
+  }
+};
+const proxy = new Proxy({}, handler);
+module.exports = proxy;
+module.exports.default = proxy;
+EOF
+        # Also stub the native .node file if it exists (prevent dlopen crash)
+        if [ -d "$LANCEDB_DIR/linux-arm64" ]; then
+            rm -rf "$LANCEDB_DIR/linux-arm64" 2>/dev/null || true
+        fi
+        if [ -d "$LANCEDB_DIR/darwin-arm64" ]; then
+            rm -rf "$LANCEDB_DIR/darwin-arm64" 2>/dev/null || true
+        fi
+        if [ -d "$LANCEDB_DIR/win32-arm64" ]; then
+            rm -rf "$LANCEDB_DIR/win32-arm64" 2>/dev/null || true
+        fi
+        log "lancedb stub 应用成功"
+        echo -e "${GREEN}✓ lancedb stub 应用成功${NC}"
+    else
+        log "lancedb 目录不存在，跳过 stub"
+    fi
+}
+
 check_deps() {
     # Check and install basic dependencies
     log "开始检查基础环境"
@@ -488,7 +530,7 @@ configure_npm() {
                     log "强制更新模式，直接更新"
                     echo -e "${YELLOW}正在更新 Openclaw 到 $TARGET_VERSION...${NC}"
                     # 使用 --ignore-scripts 跳过原生模块编译（koffi/clipboard 在 Termux 上无法编译）
-                    run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION --ignore-scripts
+                    run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION --ignore-scripts --force
                     if [ $? -ne 0 ]; then
                         log "Openclaw 更新失败"
                         echo -e "${RED}错误：Openclaw 更新失败${NC}"
@@ -508,8 +550,8 @@ configure_npm() {
                     if [ "$UPDATE_CHOICE" = "y" ] || [ "$UPDATE_CHOICE" = "Y" ]; then
                         log "开始更新 Openclaw 到 $TARGET_VERSION"
                         echo -e "${YELLOW}正在更新 Openclaw 到 $TARGET_VERSION...${NC}"
-                        # 使用 --ignore-scripts 跳过原生模块编译（koffi/clipboard 在 Termux 上无法编译）
-                        run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION --ignore-scripts
+                        # 使用 --ignore-scripts 跳过原生模块编译，--force 绕过平台兼容性检查（lancedb 不支持 android）
+                        run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION --ignore-scripts --force
                         if [ $? -ne 0 ]; then
                             log "Openclaw 更新失败"
                             echo -e "${RED}错误：Openclaw 更新失败${NC}"
@@ -534,7 +576,7 @@ configure_npm() {
         log "开始安装 Openclaw"
         echo -e "${YELLOW}正在安装 Openclaw $TARGET_VERSION...${NC}"
         # 使用 --ignore-scripts 跳过原生模块编译（koffi/clipboard 在 Termux 上无法编译）
-        run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION --ignore-scripts
+        run_cmd env NODE_LLAMA_CPP_SKIP_DOWNLOAD=true npm i -g openclaw@$TARGET_VERSION --ignore-scripts --force
         if [ $? -ne 0 ]; then
             log "Openclaw 安装失败"
             echo -e "${RED}错误：Openclaw 安装失败${NC}"
@@ -553,7 +595,10 @@ configure_npm() {
     # 运行 openclaw update 来构建原生模块
     echo -e "${YELLOW}正在构建原生模块（可能需要几分钟）...${NC}"
     export OA_GLIBC=1
+    # 设置 npm 忽略平台检查，避免 openclaw update 内部调用 npm 时因 lancedb 等包报 EBADPLATFORM
+    npm config set force true 2>/dev/null || true
     run_cmd openclaw update || true
+    npm config set force false 2>/dev/null || true
 
     # 验证 dist 目录是否存在
     if [ ! -d "$BASE_DIR/dist" ]; then
@@ -591,6 +636,7 @@ WRAPPER
 
     # 应用 koffi stub (Termux 兼容性修复)
     apply_koffi_stub
+    apply_lancedb_stub
 
     # 安装额外的运行时依赖（解决用户报告缺少依赖的问题）
     log "安装额外依赖包"
